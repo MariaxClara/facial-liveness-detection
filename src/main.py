@@ -151,7 +151,6 @@ def main():
                     color=(0, 255, 255),
                 )
             
-            # Head pose (yaw/pitch/roll)
             ypr = estimate_head_pose_ypr(landmarks, frame.shape)
             yaw = pitch = roll = None
             if ypr is not None:
