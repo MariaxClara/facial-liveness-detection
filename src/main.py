@@ -10,6 +10,9 @@ from liveness.rules_blink_only import BlinkOnlyLivenessRule
 from liveness.rules_blink_brightness import BlinkBrightnessLivenessRule
 from utils.video_io import open_webcam
 
+from features.head_pose import estimate_head_pose_ypr
+from liveness.rules_head_pose_challenge import HeadPoseChallengeRule
+
 
 def draw_text(img, text, org, color=(0, 255, 0)):
     cv2.putText(
@@ -58,7 +61,6 @@ def main():
     cap = open_webcam(0)
     detector = FaceAndLandmarksDetector()
 
-    # Sensores
     blink_detector = BlinkDetector(
         ear_threshold=config.EAR_THRESHOLD,
         min_frames_eye_closed=config.MIN_FRAMES_EYE_CLOSED,
@@ -81,6 +83,14 @@ def main():
         require_brightness_live_like=True,
     )
 
+    rule_head_pose = HeadPoseChallengeRule(
+        yaw_thr=15.0,
+        center_thr=7.0,
+        hold_frames=8,
+        assume_selfie=False
+    )
+
+
     print("Pressione 'q' para sair.")
 
     while True:
@@ -91,19 +101,15 @@ def main():
         landmarks = detector.process_frame(frame)
 
         if landmarks is not None:
-            # Atualiza sensores
             ear = blink_detector.update(landmarks, frame.shape)
             bright_info = brightness_liveness.update(frame, landmarks)
 
-            # Desenho visual (rosto + olhos)
             draw_face_bbox(frame, landmarks)
             draw_eye_points(frame, landmarks)
 
-            # --- Informações básicas na tela ---
             draw_text(frame, f"EAR: {ear:.3f}", (10, 30))
             draw_text(frame, f"Blinks: {blink_detector.total_blinks}", (10, 60))
 
-            # Brilho: média e variância (se já tiver histórico suficiente)
             if bright_info["mean"] is not None:
                 draw_text(frame, f"BrightMean: {bright_info['mean']:.1f}", (10, 90))
             if bright_info["var_mean"] is not None:
@@ -115,7 +121,6 @@ def main():
             # --- Decisão Método B: blink + brilho ---
             decision_b = rule_blink_bright.decide(blink_detector, bright_info)
 
-            # Mostrar decisão A
             if decision_a["live"]:
                 draw_text(
                     frame,
@@ -131,7 +136,6 @@ def main():
                     color=(0, 255, 255),
                 )
 
-            # Mostrar decisão B
             if decision_b["live"]:
                 draw_text(
                     frame,
@@ -146,6 +150,31 @@ def main():
                     (10, 190),
                     color=(0, 255, 255),
                 )
+            
+            # Head pose (yaw/pitch/roll)
+            ypr = estimate_head_pose_ypr(landmarks, frame.shape)
+            yaw = pitch = roll = None
+            if ypr is not None:
+                yaw, pitch, roll = ypr
+                draw_text(frame, f"Yaw: {yaw:.1f}", (10, 220))
+                draw_text(frame, f"Pitch: {pitch:.1f}", (10, 250))
+                draw_text(frame, f"Roll: {roll:.1f}", (10, 280))
+            else:
+                draw_text(frame, "HeadPose: N/A", (10, 220), color=(0, 0, 255))
+
+            decision_pose = rule_head_pose.decide(yaw)
+
+            draw_text(
+                frame,
+                f"POSE: {decision_pose['instruction']}",
+                (10, 310),
+                color=(0, 255, 0) if decision_pose["ok_step"] else (0, 0, 255),
+            )
+
+            if decision_pose["live"]:
+                draw_text(frame, f"LIVENESS C (Pose): {decision_pose['reason']}", (10, 340), color=(0, 255, 0))
+            else:
+                draw_text(frame, f"LIVENESS C (Pose): {decision_pose['reason']}", (10, 340), color=(0, 255, 255))
 
         else:
             draw_text(frame, "Nenhum rosto detectado", (10, 30), color=(0, 0, 255))
@@ -155,6 +184,9 @@ def main():
         key = cv2.waitKey(1) & 0xFF
         if key == ord("q"):
             break
+        if key == ord("r"):
+            rule_head_pose.reset()
+
 
     cap.release()
     cv2.destroyAllWindows()
